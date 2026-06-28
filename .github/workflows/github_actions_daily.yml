@@ -1,0 +1,137 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# VCP Scanner — Daily Production Run
+# GitHub Actions Workflow
+#
+# Runs every weekday at 09:45 IST (04:15 UTC) — 15 min after NSE opens.
+# Also available for manual trigger.
+#
+# What it does:
+#   1. Incremental price data update (only new bars since last run)
+#   2. Live VCP scan across full NSE universe
+#   3. Saves signals to SQLite database
+#   4. Sends Telegram alert with today's signals
+#   5. Uploads the SQLite database and logs as artifacts (30-day retention)
+#
+# Secrets required (Settings → Secrets → Actions):
+#   TELEGRAM_BOT_TOKEN   — bot token from @BotFather
+#   TELEGRAM_CHAT_ID     — your chat / channel ID
+#   ACCOUNT_SIZE         — optional, defaults to 1000000
+#   RISK_PCT             — optional, defaults to 1.0
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: VCP Daily Scan
+
+on:
+  schedule:
+    #         ┌─ min  ┌─ hour (UTC)  ┌─ day  ┌─ month  ┌─ weekday (1=Mon)
+    #         │       │              │        │         │
+    - cron: "15 4 * * 1-5"   # 04:15 UTC = 09:45 IST, Mon–Fri
+
+  workflow_dispatch:          # allow manual trigger from Actions tab
+    inputs:
+      download_full:
+        description: "Re-download full price history? (yes / no)"
+        required: false
+        default: "no"
+      notify_telegram:
+        description: "Send Telegram notification? (yes / no)"
+        required: false
+        default: "yes"
+
+env:
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+  ACCOUNT_SIZE:       ${{ secrets.ACCOUNT_SIZE || '1000000' }}
+  RISK_PCT:           ${{ secrets.RISK_PCT || '1.0' }}
+
+jobs:
+  daily-vcp-scan:
+    name: VCP Daily Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45       # full NSE scan takes ~15-20 min; 45 is safe headroom
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ─────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 3. Restore cached price data ─────────────────────────────────────────
+      # The cache key includes the week number so a fresh download is forced
+      # every Monday, ensuring stale weekend data never accumulates.
+      - name: Restore price data cache
+        uses: actions/cache@v4
+        with:
+          path: data/daily
+          key: vcp-price-data-${{ runner.os }}-week-${{ steps.date.outputs.week }}
+          restore-keys: |
+            vcp-price-data-${{ runner.os }}-week-
+            vcp-price-data-${{ runner.os }}-
+
+      # ── 4. Get current date + week for cache key ─────────────────────────────
+      - name: Get date metadata
+        id: date
+        run: |
+          echo "today=$(date +'%Y-%m-%d')"       >> $GITHUB_OUTPUT
+          echo "week=$(date +'%Y-W%V')"           >> $GITHUB_OUTPUT
+          echo "ist=$(TZ=Asia/Kolkata date +'%Y-%m-%d %H:%M IST')" >> $GITHUB_OUTPUT
+
+      # ── 5. Download / update price data ─────────────────────────────────────
+      - name: Update price data
+        run: |
+          if [ "${{ github.event.inputs.download_full }}" = "yes" ]; then
+            echo "Full refresh requested — re-downloading all history"
+            python main.py --download --full-refresh
+          else
+            echo "Incremental update — fetching only new bars"
+            python main.py --download
+          fi
+
+      # ── 6. Run VCP scan ──────────────────────────────────────────────────────
+      - name: Run VCP scan
+        run: |
+          if [ "${{ github.event.inputs.notify_telegram }}" = "no" ]; then
+            python main.py --save --no-telegram
+          else
+            python main.py --save
+          fi
+
+      # ── 7. Upload artifacts ───────────────────────────────────────────────────
+      - name: Upload signals database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcp-signals-${{ steps.date.outputs.today }}
+          path: data/signals/vcp_signals.db
+          retention-days: 30
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcp-logs-${{ steps.date.outputs.today }}
+          path: logs/
+          retention-days: 14
+
+      # ── 8. Summary in GitHub UI ───────────────────────────────────────────────
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "## VCP Daily Scan — ${{ steps.date.outputs.ist }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Run date | ${{ steps.date.outputs.today }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow | Daily Scan |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the **vcp-signals-${{ steps.date.outputs.today }}** artifact to download today's SQLite database." >> $GITHUB_STEP_SUMMARY

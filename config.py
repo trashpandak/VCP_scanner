@@ -106,12 +106,12 @@ VCP_MIN_WIDTH_PCT         = 2.0
 VCP_MAX_FIRST_WIDTH_PCT   = 40.0
 VCP_MAX_LAST_WIDTH_PCT    = 15.0   # NSE: 15% (US Minervini: 10%)
 VCP_TIGHTENING_RATIO      = 0.92
-VCP_HIGHER_LOWS_TOLERANCE = 0.02
+VCP_HIGHER_LOWS_TOLERANCE = 0.05   # raised from 0.02
 
 # Volume rules
 VCP_FINAL_VOL_MAX_RATIO    = 0.75
 VCP_VDU_TOLERANCE          = 1.20
-VCP_BREAKOUT_VOLUME_RATIO  = 1.30   # NSE: 1.30 (US: 1.40)
+VCP_BREAKOUT_VOLUME_RATIO   = 1.10   # lowered from 1.30 — NSE historical breakouts often below 1.3x
 VCP_BREAKOUT_VOL_MA_PERIOD = 50
 
 # Pivot / buy zone / stop
@@ -124,7 +124,7 @@ VCP_RS_PREFERRED = 85
 
 # Backtesting
 VCP_MIN_BARS_FOR_SCORING = 260
-VCP_WALK_STEP_DAYS       = 5
+VCP_WALK_STEP_DAYS       = 1     # daily step to catch every breakout day (was 5)
 
 # Live scanner gate
 VCP_MIN_QUALITY_SCORE = 60.0
